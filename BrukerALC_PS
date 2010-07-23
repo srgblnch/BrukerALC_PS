@@ -1,0 +1,18 @@
+#!/bin/sh
+
+# map input arguments to names variables
+SERVER=`basename $0`
+INST=$1
+
+# setup enviroment
+PYTHONPATH="$SICILIA/ds/python/$SERVER:$PYTHONPATH"
+
+# workaround for RT #3273
+CMD="/usr/bin/python -m $SERVER $INST"
+SCREEN="screen -dmS  $SERVER-$INST -R"
+if [ "$INST" == "-?" ];
+then
+    $CMD
+else
+$SCREEN $CMD
+fi
