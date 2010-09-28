@@ -28,19 +28,15 @@
 from time import time
 import PyTango as Tg
 # extra imports
-import ps_standard as PS
-from ps_util import *
-
+import PowerSupply.standard as PS
+from PowerSupply.util import *
 # local imports
-from modmux import ModMux, ModMuxException, PM_STANDBY, PM_OFF,  PM_ON
+from modmux import ModMux, ModMuxException
 
 # after how many seconds to wait before tryin to read again from a modbus
 # device that timed out. More than 3 seconds since the default timeout is 3
 # seconds.
-REPEAT_DELAY = 5
-
-class Release:
-  hexversion = 0x000001
+REPEAT_DELAY = 9
 
 class BrukerALC_ModMux(PS.PowerSupply):
     '''Control for Bruker powersupplies for the correctors in ALBAs
@@ -72,6 +68,7 @@ class BrukerALC_ModMux(PS.PowerSupply):
         self.modmux.set_timeout_millis_df(self.ModbusTimeout)
         self._next_update = 0
         self.STAT.INITIALIZED()
+        self.On()
 
     __MODMUX = None
     @classmethod
@@ -93,12 +90,12 @@ class BrukerALC_ModMux(PS.PowerSupply):
 
     ### Commands ###
 
-    @PS.ExceptionHandler
+    @PS.CommandExc
     def UpdateState(self):
 
         # delays update if Modbus calls timeout, ensures responsiveness
         # even if client is not responding
-        if self._next_update > time.time():
+        if self._next_update > time():
             return self.get_state()
 
         M = self.modmux
@@ -109,7 +106,7 @@ class BrukerALC_ModMux(PS.PowerSupply):
 
         # guards for handling communication errors
         except Tg.CommunicationFailed, flt:
-            self._next_update = time.time()+REPEAT_DELAY
+            self._next_update = time()+REPEAT_DELAY
             reason = flt[-1].reason
             desc = flt[-1].desc
             if reason == 'API_DeviceTimedOut':
@@ -118,62 +115,51 @@ class BrukerALC_ModMux(PS.PowerSupply):
                 self.modmux.set_timeout_millis_df(self.ModbusTimeout)
             else:
                 self.STAT.ALARM('communication: %s' % desc)
-            raise PS.PS_Exception(desc)
 
         except Tg.DevFailed, flt:
-            self._next_update = time()+5
-            reason = flt[-1]['reason']
-            desc = flt[0]['desc']
+            self._next_update = time()+REPEAT_DELAY
+            reason = flt[-1].reason
+            desc = flt[0].desc
             self.STAT.ALARM('%s' % desc)
-            raise PS.PS_Exception(desc)
-
-        # process updated information
-        R = M.Ready
-        O = M.On
-
-        if R is None:
-            self.STAT.UNKNOWN("no data")
-
-        elif R and O:
-            self.STAT.ON_CURRENT()
-
-        elif R:
-            self.STAT.OFF()
-
-        elif not R:
-            self.STAT.INTERLOCK("")
 
         else:
-            self.STAT.SYNTH_FAULT( (R,O) )
+            # process updated information
+            R = M.st_ready
+            O = M.st_on
+
+            if R is None:
+                self.STAT.UNKNOWN("no data read")
+
+            elif R and O:
+                self.STAT.ON_CURRENT()
+
+            elif R:
+                self.STAT.OFF(what='power supply')
+
+            elif not R:
+                self.STAT.INTERLOCK("")
+
+            else:
+                self.STAT.SYNTH_FAULT( (R,O) )
 
 
-    @PS.ExceptionHandler
+    @PS.CommandExc
     def On(self):
-        self.modmux.powermode = PM_ON
+        self.modmux.poweron()
 
-    @PS.ExceptionHandler
+    @PS.CommandExc
     def Off(self):
-        self.modmux.powermode = PM_OFF
-
-    @PS.ExceptionHandler
-    def Standby(self):
-        self.modmux.powermode = PM_STANDBY
+        self.modmux.poweroff()
 
     @PS.ExceptionHandler
     def Summary(self):
         self.__summary = self.modmux.summary()
         return self.__summary
 
-
     ### Attributes ###
-
     @PS.ExceptionHandler
     def read_Ready(self, attr):
-        attr.set_value(bool(self.modmux.Ready))
-
-    @PS.ExceptionHandler
-    def read_Fault(self, attr):
-        attr.set_value(int(not self.modmux.Ready))
+        attr.set_value(bool(self.modmux.st_ready))
 
     @PS.ExceptionHandler
     def read_RemoteMode(self, attr):
@@ -189,7 +175,7 @@ class BrukerALC_ModMux_Class(PS.PowerSupply_Class):
     attr_list = PS.gen_attr_list(max_err=16)
 
 
-    cmd_opt = ('Standby', 'UpdateState' )
+    cmd_opt = ('UpdateState', )
     cmd_list = PS.gen_cmd_list(opt=cmd_opt)
     cmd_list['Summary'] = [
         [ Tg.DevVoid, "" ],

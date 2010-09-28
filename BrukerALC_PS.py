@@ -23,17 +23,16 @@ the TANGO DS and the launching.
 '''
 
 META = u"""
-    $URL: https://tango-ds.svn.sourceforge.net/svnroot/tango-ds/Servers/PowerSupply/BrukerEC_PS/1.9/BrukerEC_PS.py $
-    $LastChangedBy: lkrause2 $
-    $Date: 2010-07-20 14:38:59 +0200 (mar 20 de jul de 2010) $
-    $Rev: 1911 $
+    $URL$
+    $LastChangedBy$
+    $Date$
+    $Rev$
     Author: Lothar Krause <lkrause@cells.es>
-    License: GPL3+ $
+    License: GPL3+
 """.encode('latin1')
 
 ### Imports ###
 # Python Imports
-import sys
 import logging
 import socket
 import traceback
@@ -41,23 +40,23 @@ from types import StringType
 from pprint import pformat
 from copy import copy
 from functools import wraps
+from time import time
 
 # extra imports
 import PyTango as Tg
 AQ = Tg.AttrQuality
-import ps_standard as PS
-from ps_util import *
+
+import PowerSupply.standard as PS
+from PowerSupply.util import *
 
 # relative imports
 from BrukerALC_ModMux import BrukerALC_ModMux, BrukerALC_ModMux_Class, ModMuxException
-from modmux import DEFAULT_CORRECT
+from modmux import DEFAULT_CORRECT, error_str
 
 class BrukerALC_PS(PS.PowerSupply):
     '''Tango DS for ALBAs Bruker power supplies controlled over a Phoenix PLC
-using modbus/TCP.
+       using modbus/TCP.
     '''
-
-    # assigned later in main program
 
     def __init__(self, cl, name):
         PS.PowerSupply.__init__(self, cl, name)
@@ -65,11 +64,10 @@ using modbus/TCP.
 
     def init_device(self, cl, name):
         PS.PowerSupply.init_device(self,cl,name)
-        self.modmux = BrukerALC_ModMux.modmux_instance()
+        M = self.modmux = BrukerALC_ModMux.modmux_instance()
 
-        # also catches defect #2658088 in PyTango
         if not self.Channel:
-            desc = "mandatory property 'Channel' not set for device %r" % name
+            desc = "mandatory property 'Channel' not set for device %r (%s)" % (name, type(name).__name__)
             raise Exception(desc)
         try:
             self.Channel = int(self.Channel)
@@ -77,11 +75,33 @@ using modbus/TCP.
             desc = "property 'Channel' of device %r must be an integer, not %r." % ( name, self.Channel )
             raise Exception(desc)
 
-        # sets up event handling
-        self.set_change_event("Status", True, True)
-        self.set_change_event("State", True, True)
+        # communicates Izero and Ilimit to modmux
+        offset = self._get_attr_correction('CurrentSetpoint', dflt=DEFAULT_CORRECT)['Offset']
+        M.Izero[self.Channel] = int(offset)
 
+        Ilimit = self._correct2('Current', self.RegulationPrecision, True, dflt=DEFAULT_CORRECT)
+        M.Ilimit[self.Channel] = int(Ilimit)
         self.STAT.INITIALIZED()
+
+    def is_power_on(self):
+        return self.modmux.is_channel_on(self.Channel)
+
+    def is_busy(self):
+        if self.get_state()!=Tg.DevState.MOVING:
+            return False
+        # checks whether too far away from setpoint
+        av = self._read('CurrentDelta')
+        if av.quality==PS.AQ_VALID and self.is_power_on():
+            return abs(av.value) > self.RegulationPrecision
+        else:
+            return False
+
+    def update_busy(self):
+        """Updates state,status when new current setpoint has been set.
+        """
+        if self.get_state() not in (Tg.DevState.ON, Tg.DevState.MOVING):
+            return
+        self.STAT.CURRENT_ADJUST()
 
     ### Commands ###
     @PS.CommandExc
@@ -94,8 +114,8 @@ using modbus/TCP.
 
         # setup some alias to render code more readable
         ch = self.Channel
-        READY = MOD.Ready
-        ON = MOD.channel_on[self.Channel]
+        READY = MOD.st_ready
+        ON = self.is_power_on()
 
         if READY is None:
             s = BrukerALC_ModMux.stat_instance()
@@ -105,59 +125,56 @@ using modbus/TCP.
             self.STAT.NOT_READY()
         # READY guranteed after this line
 
-        elif ON:
-            p = PS.PSEUDO_ATTR
-            self.read_Current(p)
-            if p.quality == AQ.ATTR_VALID:
-                self.STAT.ON_CURRENT()
-            else:
-                self.STAT.ON_CURRENT()
+        elif self.is_busy():
+            self.update_busy()
 
-        elif not MOD.On:
-            self.STAT.OFF()
+        elif not MOD.st_on:
+            self.STAT.OFF(what='power supply')
+
+        elif ON:
+            code = MOD.Imeas_state[self.Channel]
+            if code is None:
+                if MOD.Iref[self.Channel] is None:
+                    self.STAT.ON_CURRENT(extra='setpoint unknown')
+                else:
+                    self.STAT.ON_CURRENT()
+            else:
+                status = ''.join(error_str(code))
+                self.STAT.ALARM(status)
+
 
         elif ON is None:
             self.STAT.UNKNOWN('ready')
 
-        # the correctors have no real "OFF" state so we use "STANDBY"
-        # - for the moment
         elif not ON:
-            extra = None
-            try:
-                aval = self._read('CurrentSetpoint')
-                extra = str(aval.value)+" A"
-            except Exception, exc:
-                self.log.debug(exc)
-            self.STAT.STANDBY(extra)
+            self.STAT.OFF()
 
         # otherwise the programmar made a mistake
         else:
             self.STAT.SYNTH_FAULT("ON=%r,READY=%r" % (ON, READY))
 
+
     @PS.CommandExc
     def read_Ready(self, attr):
-        attr.set_value(bool(self.modmux.Ready))
+        attr.set_value(bool(self.modmux.st_ready))
 
     @PS.CommandExc
     def read_Fault(self, attr):
-        attr.set_value( bool(not self.modmux.Ready) )
+        attr.set_value(bool(not self.modmux.st_ready) )
 
     @PS.CommandExc
     def On(self):
         try:
-            M = self.modmux
-            offset = self._get_attr_correction('CurrentSetpoint')['Offset']
-            if M.Iref[self.Channel] is None:
-                self.modmux.set_Iref(self.Channel, -offset)
-            self.modmux.switch_channel_on(self.Channel)
+            self.modmux.switch_channel_on(self.Channel, force=True)
+            self.set_state(Tg.DevState.MOVING)
+            self.STAT.SWITCH_ON()
+            self.update_busy()
         except ModMuxException, exc:
             raise PS.PS_Exception(exc)
 
     @PS.CommandExc
     def Off(self):
-        offset = self._get_attr_correction('CurrentSetpoint')['Offset']
-        self.modmux.switch_channel_off(self.Channel, -offset)
-
+        self.modmux.switch_channel_off(self.Channel)
 
     ### Current related ###
     # low-level attribute
@@ -176,66 +193,74 @@ using modbus/TCP.
 
         Iref = self.modmux.Iref[self.Channel]
         if not Iref is None:
-            attr.set_write_value(int(val))
+            attr.set_write_value(Iref)
 
     @PS.AttrExc
     def write_I(self, attr):
-        Iref = int(attr.get_write_value())
-        self.modmux.set_Iref(self.Channel, Iref)
+        self.modmux.set_Iref(self.Channel, attr.get_write_value())
 
-    # corrected values
     @PS.AttrExc
     def read_Current(self, attr):
         meas = self.modmux.Imeas[self.Channel]
-        v = self._correct_attr('CurrentSetpoint', attr, meas, inv=True, dflt=DEFAULT_CORRECT)
+        cor = self._correct2('Current', meas, dflt=DEFAULT_CORRECT)
+        if cor is None:
+            attr.set_quality(PS.AQ_INVALID)
+            return
 
-    @PS.AttrExc
-    def read_CurrentStatus(self, attr):
-        ist = self.modmux.Imeas_state[self.Channel]
-        status = ''.join(modmux.error_str(ist))
-        attr.set_value(status)
+        # sets quality to warning when too far away from setpoint
+        Iset_aval = self._read('CurrentSetpoint')
+        if Iset_aval.quality==PS.AQ_VALID and abs(Iset_aval.value-cor) > self.RegulationPrecision and self.get_state() == Tg.DevState.ON:
+            attr.set_value_date_quality(cor, time(), PS.AQ_WARNING)
+        else:
+            attr.set_value(cor)
 
     @PS.AttrExc
     def read_CurrentSetpoint(self, attr):
         Iref = self.modmux.Iref[self.Channel]
         v = self._correct_attr('CurrentSetpoint', attr, Iref, inv=True, dflt=DEFAULT_CORRECT)
-        attr.set_write_value(v)
+        if not v is None:
+          attr.set_write_value(v)
 
     @PS.AttrExc
     def write_CurrentSetpoint(self, attr):
-        data = []
-        attr.get_write_value(data)
-        corrected = self._correct('CurrentSetpoint', data[0], dflt=DEFAULT_CORRECT)
+        Iset = attr.get_write_value()
+        corrected = self._correct('CurrentSetpoint', Iset, dflt=DEFAULT_CORRECT)
         self.modmux.set_Iref(self.Channel, corrected)
+        self.update_busy()
 
     ### Voltage related ###
     @PS.AttrExc
     def read_Voltage(self, attr):
-        Umeas = self.modmux.Umeas[self.Channel]
-        if Umeas is None:
+        Vmeas = self.modmux.Vmeas[self.Channel]
+        if Vmeas is None:
             attr.set_quality(AQ.ATTR_INVALID)
         else:
-            U = self._correct('Voltage', Umeas, inv=True, dflt=DEFAULT_CORRECT)
-            attr.set_value(U)
-
+            V = self._correct('Voltage', Vmeas, inv=True, dflt=DEFAULT_CORRECT)
+            attr.set_value(V)
 
     @PS.AttrExc
     def read_V(self, attr):
-        val = self.modmux.Umeas[self.Channel]
-        if val is None:
+        V = self.modmux.Vmeas[self.Channel]
+        if V is None:
             attr.set_quality(AQ.ATTR_INVALID)
         else:
-            val = int(val)
-            attr.set_value(val)
+            attr.set_value(V)
+
+    @PS.AttrExc
+    def read_ErrorCode(self, attr):
+      state1 = self.modmux.Imeas_state[self.Channel] or 0
+      state2 = self.modmux.Vmeas_state[self.Channel] or 0
+      attr.set_value( (state1<<8) | state2 )
 
 
 class BrukerALC_PS_Class(PS.PowerSupply_Class):
-    class_property_list = {
-    }
+    class_property_list = PS.gen_property_list( ("RegulationPrecision",))
+    class_property_list['RegulationPrecision'][2] = 0.01 # 5e-3
 
-    device_property_list = PS.gen_property_list( ("Channel",), XI=4)
+    device_property_list = PS.gen_property_list( ("Channel",), XI=4, cpl=class_property_list)
 
-    attr_list = PS.gen_attr_list(opt=('Current','CurrentSetpoint', 'Voltage'), max_err=100)
+    attr_opt = ('Current','CurrentSetpoint', 'Voltage')
+    attr_list = PS.gen_attr_list(opt=attr_opt, max_err=100)
     POLL_PERIOD = 500
     attr_list['Current'][1]['polling period'] = POLL_PERIOD
     I_FMT = '%6.4f'
@@ -245,11 +270,12 @@ class BrukerALC_PS_Class(PS.PowerSupply_Class):
     attr_list['Voltage'][1]['polling period'] = POLL_PERIOD
     attr_list['I'] = [ [ Tg.DevShort, Tg.SCALAR, Tg.READ_WRITE ], dict() ]
     attr_list['V'] = [ [ Tg.DevShort, Tg.SCALAR, Tg.READ ], dict() ]
+    attr_list['ErrorCode'] = [ [ Tg.DevLong, Tg.SCALAR, Tg.READ ], dict() ]
 
-    cmd_opt = ( 'UpdateState',)
+    cmd_opt = ( 'UpdateState', )
     cmd_list = PS.gen_cmd_list(opt=cmd_opt)
     cmd_list['UpdateState'][2]['polling period'] = 500
 
 
 if __name__ == '__main__':
-  PS.tango_main('BrukerALC_PS', sys.argv, (BrukerALC_PS, BrukerALC_ModMux) )
+    PS.tango_main('BrukerALC_PS', (BrukerALC_PS, BrukerALC_ModMux) )
