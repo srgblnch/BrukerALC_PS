@@ -235,7 +235,7 @@ def CommExc(f):
             return f(*args, **kwargs)
 
         except Tg.DevFailed, exc:
-            args[0].comm_state = None
+            args[0].comm_t = None
             raise
 
     functools.update_wrapper(g,f)
@@ -281,7 +281,7 @@ class ModMux(object):
         self.read_count = 0
         self.read_repeat_count = 0
         self.write_count = 0
-        self.comm_state = None
+        self.comm_t = None
 
     def connect(self, name):
         self.device_name = name
