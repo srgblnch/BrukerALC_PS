@@ -235,6 +235,9 @@ class ModMux(object):
         self.need_config = False
         self.pcp_configured = False
 
+        # channel names
+        self.name = [ 'channel %s' % ch for ch in range(CHANNEL_NUM) ]
+
         # channel settings
         self.channel_on = [ None ] * CHANNEL_NUM
         self.Izero = [ 0.0 ] * CHANNEL_NUM
@@ -393,8 +396,8 @@ class ModMux(object):
         self.mb_coils( [COIL_OUT, 1, flag] )
 
     def switch_channel_off(self, ch0):
-        self.channel_on[ch0] = False
         self._write(ch0)
+        self.channel_on[ch0] = False
 
     def switch_channel_on(self, ch0, force=False):
         '''Switches channel 'ch0' on. If no reference current was set an
@@ -412,8 +415,8 @@ class ModMux(object):
 
         if self.Iref[ch0] is None:
             self.Iref[ch0] = self.Izero[ch0]
-        self.channel_on[ch0] = True
         r = self._write(ch0)
+        self.channel_on[ch0] = True
         return r
 
     def write_ack(self, addr, words, idx=(0,)):
@@ -527,8 +530,11 @@ class ModMux(object):
         assert ch_start <= ch0 < ch_end
         Iref, Izero, on = self.Iref, self.Izero, self.channel_on
         values = [ (Iref[ch] if on[ch] else Izero[ch]) for ch in range(ch_start,ch_end) ]
-        if None in values:
-            raise ModMuxException('can not write channel %d, missing setpoints' % ch0)
+        missing_channels = [ self.name[ch] for ch,v in enumerate(values) if v is None]
+        if missing_channels:
+            name = self.name[ch0]
+            miss = ', '.join(missing_channels)
+            raise ModMuxException('can not write %s, missing setpoints for %s' % (name, miss))
         args = [ addr, 1+AOUT_PER_GROUP, AOUT_GROUP_CODE[groupidx] ] + values
         self.log.debug('writing aout %r',args)
         self.mb_write( args )

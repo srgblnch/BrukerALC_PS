@@ -68,7 +68,11 @@ class BrukerALC_ModMux(PS.PowerSupply):
         self.modmux.set_timeout_millis_df(self.ModbusTimeout)
         self._next_update = 0
         self.STAT.INITIALIZED()
-        self.On()
+        try:
+            PS.CommandExc(self.__class__.On)(self)
+        except Exception, exc:
+            self.log.error('failure in init_device {0}'.format(exc))
+
 
     __MODMUX = None
     @classmethod

@@ -75,6 +75,9 @@ class BrukerALC_PS(PS.PowerSupply):
             desc = "property 'Channel' of device %r must be an integer, not %r." % ( name, self.Channel )
             raise Exception(desc)
 
+        # informs modmux of channel hname
+        M.name[self.Channel] = self.get_name().rpartition('/')[2].upper()
+
         # communicates Izero and Ilimit to modmux
         offset = self._get_attr_correction('CurrentSetpoint', dflt=DEFAULT_CORRECT)['Offset']
         M.Izero[self.Channel] = int(offset)
@@ -109,6 +112,8 @@ class BrukerALC_PS(PS.PowerSupply):
         # faults are sticky
         if self.get_state()==Tg.DevState.FAULT:
             return self.get_state()
+        elif self.get_state()==Tg.DevState.ALARM and self.alarms:
+            return self.get_state()
 
         MOD = self.modmux
 
@@ -135,7 +140,7 @@ class BrukerALC_PS(PS.PowerSupply):
             code = MOD.Imeas_state[self.Channel]
             if code is None:
                 if MOD.Iref[self.Channel] is None:
-                    self.STAT.ON_CURRENT(extra='setpoint unknown')
+                    self.STAT.ALARM('power on but setpoint unknown!')
                 else:
                     self.STAT.ON_CURRENT()
             else:
@@ -170,6 +175,7 @@ class BrukerALC_PS(PS.PowerSupply):
             self.STAT.SWITCH_ON()
             self.update_busy()
         except ModMuxException, exc:
+            self.STAT.ALARM(str(exc))
             raise PS.PS_Exception(exc)
 
     @PS.CommandExc
