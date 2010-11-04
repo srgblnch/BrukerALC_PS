@@ -167,7 +167,11 @@ class BrukerALC_ModMux(PS.PowerSupply):
 
     @PS.ExceptionHandler
     def read_RemoteMode(self, attr):
-        attr.set_value(True)
+        if self.modmux.comm_t:
+            attr.set_value(True, self.modmux.comm_t, PS.AQ_VALID)
+        else:
+            attr.set_quality(PS.AQ_INVALID)
+
 
 class BrukerALC_ModMux_Class(PS.PowerSupply_Class):
 

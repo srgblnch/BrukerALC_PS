@@ -37,6 +37,7 @@ import logging
 from functools import partial
 import PyTango as Tg
 from PowerSupply.util import int2bin
+import functools
 
 CHANNEL_NUM = 12
 
@@ -138,6 +139,9 @@ READ_DELAY = 1.0 / 100
 # maximum delay until configuration is ready, measurement data available
 MAX_DELAY = 0.1
 
+COMM_NONE = 'none'
+COMM_OKAY = 'ok'
+COMM_FAIL = 'fail'
 
 class ModMuxException(Exception):
     pass
@@ -220,6 +224,23 @@ class Channel(object):
     Vmeas = None
     Vmeas_state = 0
 
+def CommExc(f):
+    '''Decorates functions to check for communication indicating communication
+       errors.
+    '''
+
+    def g(*args, **kwargs):
+
+        try:
+            return f(*args, **kwargs)
+
+        except Tg.DevFailed, exc:
+            args[0].comm_state = None
+            raise
+
+    functools.update_wrapper(g,f)
+    return g
+
 class ModMux(object):
     ''' Master of Data class.object for multiplexing the modbus device for the
         different channels. Responsible for reading and writing modbus hardware,
@@ -260,6 +281,7 @@ class ModMux(object):
         self.read_count = 0
         self.read_repeat_count = 0
         self.write_count = 0
+        self.comm_state = None
 
     def connect(self, name):
         self.device_name = name
@@ -279,6 +301,7 @@ class ModMux(object):
             self.log.error('Could not set timeout because device %s failed %s.', self.device_name, desc)
             return df
 
+    @CommExc
     def configure(self):
         '''Configures analog terminals for reading / writing analog outputs.
         '''
@@ -343,6 +366,8 @@ class ModMux(object):
         self.Vmeas_state = extract_ain_code(self.Vmeas)
         self.st_ready, self.st_on = self.read_state()
 
+        # comm okay after all reads executed successfully
+        self.comm_t = time()
         self.jiffies += 1
 
     def read_state(self):
