@@ -186,7 +186,10 @@ class BrukerALC_PS(PS.PowerSupply):
     # low-level attribute
     @PS.AttrExc
     def read_RemoteMode(self, attr):
-        attr.set_value(True)
+        if self.modmux.comm_t:
+            attr.set_value(True, self.modmux.comm_t, PS.AQ_VALID)
+        else:
+            attr.set_quality(PS.AQ_INVALID)
 
     @PS.AttrExc
     def read_I(self, attr):
