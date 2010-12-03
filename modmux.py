@@ -282,6 +282,7 @@ class ModMux(object):
         self.read_repeat_count = 0
         self.write_count = 0
         self.comm_t = None
+        self.comm_fail = None
 
     def connect(self, name):
         self.device_name = name

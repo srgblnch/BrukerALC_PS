@@ -1,0 +1,10 @@
+1.5 
+* corrector channels will indicate communication error
+
+1.4
+* fix in reading RemoteMode
+* allows server to startup even when PLC is down
+
+1.3
+* clarifies situation when some setpoints of a group are available, preventing
+  others from being switch on, off or setpoint being changed (RT 12518)

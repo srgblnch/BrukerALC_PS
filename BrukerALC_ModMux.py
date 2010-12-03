@@ -107,23 +107,25 @@ class BrukerALC_ModMux(PS.PowerSupply):
         # reads status information from hardware
         try:
             M.update()
-
+            M.comm_fail = None
         # guards for handling communication errors
         except Tg.CommunicationFailed, flt:
             self._next_update = time()+REPEAT_DELAY
             reason = flt[-1].reason
             desc = flt[-1].desc
             if reason == 'API_DeviceTimedOut':
-                self.STAT.ALARM('modbus %r timeout' % self.ModbusDevice)
+                M.comm_fail = msg = 'modbus %r timeout' % self.ModbusDevice
+                self.STAT.COMM_ERROR(msg)
                 # possible DevFailed exception are returned and ignored
                 self.modmux.set_timeout_millis_df(self.ModbusTimeout)
             else:
-                self.STAT.ALARM('communication: %s' % desc)
+                M.comm_fail = desc
+                self.STAT.COMM_ERROR(desc)
 
         except Tg.DevFailed, flt:
             self._next_update = time()+REPEAT_DELAY
             reason = flt[-1].reason
-            desc = flt[0].desc
+            M.comm_fail = flt[0].desc
             self.STAT.ALARM('%s' % desc)
 
         else:

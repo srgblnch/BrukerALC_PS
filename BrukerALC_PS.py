@@ -122,7 +122,10 @@ class BrukerALC_PS(PS.PowerSupply):
         READY = MOD.st_ready
         ON = self.is_power_on()
 
-        if READY is None:
+        if MOD.comm_fail:
+            self.STAT.COMM_ERROR(MOD.comm_fail)
+
+        elif READY is None:
             s = BrukerALC_ModMux.stat_instance()
             self.STAT.set_stat2(s.state, s.status)
 
