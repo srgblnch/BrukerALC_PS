@@ -112,8 +112,6 @@ class BrukerALC_PS(PS.PowerSupply):
         # faults are sticky
         if self.get_state()==Tg.DevState.FAULT:
             return self.get_state()
-        elif self.get_state()==Tg.DevState.ALARM and self.alarms:
-            return self.get_state()
 
         MOD = self.modmux
 
